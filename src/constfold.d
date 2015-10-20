@@ -14,12 +14,14 @@ import ddmd.arraytypes;
 import ddmd.builtin;
 import ddmd.complex;
 import ddmd.ctfeexpr;
+import ddmd.dcast;
 import ddmd.declaration;
 import ddmd.dstruct;
 import ddmd.errors;
 import ddmd.expression;
 import ddmd.func;
 import ddmd.globals;
+import ddmd.intrange;
 import ddmd.mtype;
 import ddmd.root.longdouble;
 import ddmd.root.port;
@@ -952,10 +954,50 @@ extern (C++) UnionExp Identity(TOK op, Loc loc, Type type, Expression e1, Expres
 
 extern (C++) UnionExp Cmp(TOK op, Loc loc, Type type, Expression e1, Expression e2)
 {
+    bool doOp(V)(V v1, TOK op, V v2)
+    {
+        switch (op)
+        {
+            case TOKlt:
+                return v1 < v2;
+            case TOKle:
+                return v1 <= v2;
+            case TOKgt:
+                return v1 > v2;
+            case TOKge:
+                return v1 >= v2;
+
+            case TOKleg:
+                return 1;
+            case TOKlg:
+                return v1 != v2;
+            case TOKunord:
+                return 0;
+            case TOKue:
+                return v1 == v2;
+            case TOKug:
+                return v1 > v2;
+            case TOKuge:
+                return v1 >= v2;
+            case TOKul:
+                return v1 < v2;
+            case TOKule:
+                return v1 <= v2;
+
+            default:
+                assert(0);
+        }
+    }
+    bool doIntOp(V1, V2)(bool anyUnsigned, V1 v1, TOK op, V2 v2)
+    {
+        if (anyUnsigned)
+            return doOp!dinteger_t(v1, op, v2);
+        else
+            return doOp!sinteger_t(v1, op, v2);
+    }
+
     UnionExp ue;
     dinteger_t n;
-    real_t r1;
-    real_t r2;
     //printf("Cmp(e1 = %s, e2 = %s)\n", e1->toChars(), e2->toChars());
     if (e1.op == TOKstring && e2.op == TOKstring)
     {
@@ -969,253 +1011,123 @@ extern (C++) UnionExp Cmp(TOK op, Loc loc, Type type, Expression e1, Expression 
         int cmp = memcmp(es1.string, es2.string, sz * len);
         if (cmp == 0)
             cmp = cast(int)(es1.len - es2.len);
-        switch (op)
+        n = doOp!int(cmp, op, 0);
+    }
+    else if (e1.type.isreal() || e1.type.isimaginary())
+    {
+        if (e1.isConst() != 1 || e2.isConst() != 1)
         {
-        case TOKlt:
-            n = cmp < 0;
-            break;
-        case TOKle:
-            n = cmp <= 0;
-            break;
-        case TOKgt:
-            n = cmp > 0;
-            break;
-        case TOKge:
-            n = cmp >= 0;
-            break;
-        case TOKleg:
-            n = 1;
-            break;
-        case TOKlg:
-            n = cmp != 0;
-            break;
-        case TOKunord:
-            n = 0;
-            break;
-        case TOKue:
-            n = cmp == 0;
-            break;
-        case TOKug:
-            n = cmp > 0;
-            break;
-        case TOKuge:
-            n = cmp >= 0;
-            break;
-        case TOKul:
-            n = cmp < 0;
-            break;
-        case TOKule:
-            n = cmp <= 0;
-            break;
-        default:
-            assert(0);
+            emplaceExp!(CTFEExp)(&ue, TOKcantexp);
+            return ue;
         }
-    }
-    else if (e1.isConst() != 1 || e2.isConst() != 1)
-    {
-        emplaceExp!(CTFEExp)(&ue, TOKcantexp);
-        return ue;
-    }
-    else if (e1.type.isreal())
-    {
-        r1 = e1.toReal();
-        r2 = e2.toReal();
-        goto L1;
-    }
-    else if (e1.type.isimaginary())
-    {
-        r1 = e1.toImaginary();
-        r2 = e2.toImaginary();
-    L1:
+
+        real_t v1;
+        real_t v2;
+        if (e1.type.isreal())
+        {
+            v1 = e1.toReal();
+            v2 = e2.toReal();
+        }
+        else
+        {
+            v1 = e1.toImaginary();
+            v2 = e2.toImaginary();
+        }
+
         // Don't rely on compiler, handle NAN arguments separately
         // (DMC does do it correctly)
-        if (Port.isNan(r1) || Port.isNan(r2)) // if unordered
+        if (Port.isNan(v1) || Port.isNan(v2)) // if unordered
         {
             switch (op)
             {
             case TOKlt:
-                n = 0;
-                break;
             case TOKle:
-                n = 0;
-                break;
             case TOKgt:
-                n = 0;
-                break;
             case TOKge:
-                n = 0;
-                break;
             case TOKleg:
-                n = 0;
-                break;
             case TOKlg:
                 n = 0;
                 break;
+
             case TOKunord:
-                n = 1;
-                break;
             case TOKue:
-                n = 1;
-                break;
             case TOKug:
-                n = 1;
-                break;
             case TOKuge:
-                n = 1;
-                break;
             case TOKul:
-                n = 1;
-                break;
             case TOKule:
                 n = 1;
                 break;
+
             default:
                 assert(0);
             }
         }
         else
-        {
-            switch (op)
-            {
-            case TOKlt:
-                n = r1 < r2;
-                break;
-            case TOKle:
-                n = r1 <= r2;
-                break;
-            case TOKgt:
-                n = r1 > r2;
-                break;
-            case TOKge:
-                n = r1 >= r2;
-                break;
-            case TOKleg:
-                n = 1;
-                break;
-            case TOKlg:
-                n = r1 != r2;
-                break;
-            case TOKunord:
-                n = 0;
-                break;
-            case TOKue:
-                n = r1 == r2;
-                break;
-            case TOKug:
-                n = r1 > r2;
-                break;
-            case TOKuge:
-                n = r1 >= r2;
-                break;
-            case TOKul:
-                n = r1 < r2;
-                break;
-            case TOKule:
-                n = r1 <= r2;
-                break;
-            default:
-                assert(0);
-            }
-        }
+            n = doOp!real_t(v1, op, v2);
     }
     else if (e1.type.iscomplex())
     {
         assert(0);
     }
+    else if (e1.isConst() != 1 || e2.isConst() != 1)
+    {
+        /* Use VRP to determine whether the comparison is always true or false. */
+        bool anyUnsigned = e1.type.isunsigned() || e2.type.isunsigned();
+        IntRange r1 = getIntRange(e1);
+        IntRange r2 = getIntRange(e2);
+        switch(op)
+        {
+        case TOKul:
+        case TOKule:
+        case TOKlt:
+        case TOKle:
+            if (doIntOp(anyUnsigned, r1.imax.value, op, r2.imin.value))
+                n = 1;
+            else if (doIntOp(anyUnsigned, r1.imin.value, op, r2.imax.value))
+            {
+                emplaceExp!(CTFEExp)(&ue, TOKcantexp);
+                return ue;
+            }
+            else
+                n = 0;
+            break;
+
+        case TOKug:
+        case TOKuge:
+        case TOKgt:
+        case TOKge:
+            if (doIntOp(anyUnsigned, r1.imin.value, op, r2.imax.value))
+                n = 1;
+            else if (doIntOp(anyUnsigned, r1.imax.value, op, r2.imin.value))
+            {
+                emplaceExp!(CTFEExp)(&ue, TOKcantexp);
+                return ue;
+            }
+            else
+                n = 0;
+            break;
+            
+        case TOKleg:
+            n = 1;
+            break;
+
+        case TOKunord:
+            n = 0;
+            break;
+
+        case TOKue:
+        case TOKlg:
+            emplaceExp!(CTFEExp)(&ue, TOKcantexp);
+            return ue;
+
+        default:
+            assert(0);
+        }
+    }
     else
     {
-        sinteger_t n1;
-        sinteger_t n2;
-        n1 = e1.toInteger();
-        n2 = e2.toInteger();
-        if (e1.type.isunsigned() || e2.type.isunsigned())
-        {
-            switch (op)
-            {
-            case TOKlt:
-                n = (cast(dinteger_t)n1) < (cast(dinteger_t)n2);
-                break;
-            case TOKle:
-                n = (cast(dinteger_t)n1) <= (cast(dinteger_t)n2);
-                break;
-            case TOKgt:
-                n = (cast(dinteger_t)n1) > (cast(dinteger_t)n2);
-                break;
-            case TOKge:
-                n = (cast(dinteger_t)n1) >= (cast(dinteger_t)n2);
-                break;
-            case TOKleg:
-                n = 1;
-                break;
-            case TOKlg:
-                n = (cast(dinteger_t)n1) != (cast(dinteger_t)n2);
-                break;
-            case TOKunord:
-                n = 0;
-                break;
-            case TOKue:
-                n = (cast(dinteger_t)n1) == (cast(dinteger_t)n2);
-                break;
-            case TOKug:
-                n = (cast(dinteger_t)n1) > (cast(dinteger_t)n2);
-                break;
-            case TOKuge:
-                n = (cast(dinteger_t)n1) >= (cast(dinteger_t)n2);
-                break;
-            case TOKul:
-                n = (cast(dinteger_t)n1) < (cast(dinteger_t)n2);
-                break;
-            case TOKule:
-                n = (cast(dinteger_t)n1) <= (cast(dinteger_t)n2);
-                break;
-            default:
-                assert(0);
-            }
-        }
-        else
-        {
-            switch (op)
-            {
-            case TOKlt:
-                n = n1 < n2;
-                break;
-            case TOKle:
-                n = n1 <= n2;
-                break;
-            case TOKgt:
-                n = n1 > n2;
-                break;
-            case TOKge:
-                n = n1 >= n2;
-                break;
-            case TOKleg:
-                n = 1;
-                break;
-            case TOKlg:
-                n = n1 != n2;
-                break;
-            case TOKunord:
-                n = 0;
-                break;
-            case TOKue:
-                n = n1 == n2;
-                break;
-            case TOKug:
-                n = n1 > n2;
-                break;
-            case TOKuge:
-                n = n1 >= n2;
-                break;
-            case TOKul:
-                n = n1 < n2;
-                break;
-            case TOKule:
-                n = n1 <= n2;
-                break;
-            default:
-                assert(0);
-            }
-        }
+        n = doIntOp(e1.type.isunsigned() || e2.type.isunsigned(),
+            e1.toInteger(), op, e2.toInteger());
     }
     emplaceExp!(IntegerExp)(&ue, loc, n, type);
     return ue;

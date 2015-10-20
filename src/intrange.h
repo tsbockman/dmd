@@ -138,6 +138,8 @@ struct IntRange
     /// Compute the range of the negated absolute values of the original range.
     IntRange absNeg() const;
 
+    /// Compute the intersection of two ranges.
+    IntRange intersectWith(const IntRange& other) const;
     /// Compute the union of two ranges.
     IntRange unionWith(const IntRange& other) const;
     void unionOrAssign(const IntRange& other, bool& union_);
@@ -148,6 +150,14 @@ struct IntRange
     /// Split the range into two nonnegative- and negative-only subintervals.
     void splitBySign(IntRange& negRange, bool& hasNegRange,
                      IntRange& nonNegRange, bool& hasNonNegRange) const;
+};
+
+struct IntRangeList
+{
+    IntRange range;
+    IntRangeList *next;
+
+    IntRangeList(SignExtendedNumber lower, SignExtendedNumber upper, IntRangeList *n = NULL) : range(lower, upper), next(n) {}
 };
 
 #endif

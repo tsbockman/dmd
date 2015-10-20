@@ -10,6 +10,8 @@ module ddmd.cond;
 
 import core.stdc.string;
 import ddmd.arraytypes;
+import ddmd.declaration;
+import ddmd.dcast;
 import ddmd.dmodule;
 import ddmd.dmodule;
 import ddmd.dscope;
@@ -19,8 +21,10 @@ import ddmd.expression;
 import ddmd.globals;
 import ddmd.hdrgen;
 import ddmd.identifier;
+import ddmd.intrange;
 import ddmd.mars;
 import ddmd.mtype;
+import ddmd.root.array;
 import ddmd.root.outbuffer;
 import ddmd.tokens;
 import ddmd.visitor;
@@ -449,4 +453,163 @@ extern (C++) void printDepsConditional(Scope* sc, DVCondition condition, const(c
         ob.printf("%s\n", condition.ident.toChars());
     else
         ob.printf("%d\n", condition.level);
+}
+
+
+/***********************************************************
+ */
+extern (C++) final class ConditionVisitor : Visitor
+{
+    alias visit = super.visit;
+public:
+    bool invert = false;
+    bool deadCode = false;
+
+    override void visit(Expression e) { }
+
+    override void visit(CastExp e)
+    {
+        push(e, TOKnotequal, null);
+    }
+
+    override void visit(EqualExp e)
+    {
+        push(e.e1, e.op, e.e2);
+    }
+
+    override void visit(CmpExp e)
+    {
+        push(e.e1, e.op, e.e2);
+    }
+
+    override void visit(VarExp e)
+    {
+        push(e, TOKnotequal, null);
+    }
+
+    override void visit(NotExp e)
+    {
+        invert = !invert;
+        e.e1.accept(this);
+        invert = !invert;
+    }
+
+    override void visit(OrOrExp e)
+    {
+        if (invert)
+        {
+            e.e1.accept(this);
+            e.e2.accept(this);
+        }
+    }
+
+    override void visit(AndAndExp e)
+    {
+        if (!invert)
+        {
+            e.e1.accept(this);
+            e.e2.accept(this);
+        }
+    }
+
+    void popRanges()
+    {
+        for (int i=0; i<toPop.dim; ++i)
+        {
+            toPop[i].rangeStack = toPop[i].rangeStack.next;
+        }
+    }
+
+private:
+    Array!VarDeclaration toPop;
+
+    void push(Expression e1, TOK op, Expression e2)
+    {
+        void fixupRanges(ref IntRange v1, TOK op, ref IntRange v2)
+        {
+            switch (op)
+            {
+            case TOKle:
+                v1 = IntRange(v1.imin, v2.imax <= v1.imax ? v2.imax : v1.imax);
+                v2 = IntRange(v1.imin >= v2.imin ? v1.imin : v2.imin, v2.imax);
+                break;
+            case TOKlt:
+                v1 = IntRange(v1.imin, v2.imax <= v1.imax ? v2.imax - SignExtendedNumber(1) : v1.imax);
+                v2 = IntRange(v1.imin >= v2.imin ? v1.imin + SignExtendedNumber(1) : v2.imin, v2.imax);
+                break;
+            case TOKge:
+                v1 = IntRange(v2.imin >= v1.imin ? v2.imin : v1.imin, v1.imax);
+                v2 = IntRange(v2.imin, v1.imax <= v2.imax ? v1.imax : v2.imax);
+                break;
+            case TOKgt:
+                v1 = IntRange(v2.imin >= v1.imin ? v2.imin + SignExtendedNumber(1) : v1.imin, v1.imax);
+                v2 = IntRange(v2.imin, v1.imax <= v2.imax ? v1.imax - SignExtendedNumber(1): v2.imax);
+                break;
+            case TOKequal:
+                v2 = v1 = v1.intersectWith(v2);
+                break;
+            case TOKnotequal:
+                {
+                    const minEq = SignExtendedNumber((v1.imin == v2.imin)? 1 : 0);
+                    const maxEq = SignExtendedNumber((v1.imax == v2.imax)? 1 : 0);
+                    if (v1.imin == v1.imax)
+                        v2 = IntRange(v2.imin + minEq, v2.imax - maxEq);
+                    else if (v2.imin == v2.imax)
+                        v1 = IntRange(v1.imin + minEq, v1.imax - maxEq);
+                } break;
+            default:
+                assert(0);
+            }
+        }
+        TOK invertOp(TOK op)
+        {
+            switch (op)
+            {
+            case TOKlt:
+                return TOKge;
+            case TOKle:
+                return TOKgt;
+            case TOKgt:
+                return TOKle;
+            case TOKge:
+                return TOKlt;
+            case TOKequal:
+                return TOKnotequal;
+            case TOKnotequal:
+                return TOKequal;
+            default:
+                assert(0);
+            }
+        }
+        VarDeclaration getVarDecl(Expression e)
+        {
+            if (e.op == TOKcast)
+                e = (cast(CastExp)e).e1;//FIXME unsafe
+            VarDeclaration vd = e.op == TOKvar && e.type.isscalar() ? (cast(VarExp)e).var.isVarDeclaration() : null;
+            return vd && !vd.type.isMutable() ? vd : null;
+        }
+
+        VarDeclaration vd1 = getVarDecl(e1);
+        VarDeclaration vd2 = e2 ? getVarDecl(e2) : null;
+        if (vd1 || vd2)
+        {
+            IntRange r1 = getIntRange(e1);
+            IntRange r2 = e2 ? getIntRange(e2) : IntRange(SignExtendedNumber(0), SignExtendedNumber(0));
+            fixupRanges(r1, invert ? invertOp(op) : op, r2);
+            pushRange(vd1, r1);
+            pushRange(vd2, r2);
+        }
+    }
+    void pushRange(VarDeclaration vd, IntRange ir)
+    {
+        if (ir.imin > ir.imax)
+        {
+            deadCode = true;
+        }
+        else if (vd)
+        {
+            vd.rangeStack = new IntRangeList(ir.imin, ir.imax, vd.rangeStack);
+            toPop.push(vd);
+        }
+    }
 }

@@ -452,6 +452,12 @@ struct IntRange
         }
     }
 
+    IntRange intersectWith(const ref IntRange other) const
+    {
+        return IntRange(imin > other.imin ? imin : other.imin,
+                        imax < other.imax ? imax : other.imax);
+    }
+
     IntRange unionWith(const ref IntRange other) const
     {
         return IntRange(imin < other.imin ? imin : other.imin,
@@ -490,5 +496,17 @@ struct IntRange
             nonNegRange.imin = imin.negative ? SignExtendedNumber(0) : imin;
             nonNegRange.imax = imax;
         }
+    }
+}
+
+struct IntRangeList
+{
+    IntRange range;
+    IntRangeList *next;
+
+    this(SignExtendedNumber lower, SignExtendedNumber upper, IntRangeList *n = null)
+    {
+        range = IntRange(lower, upper);
+        next = n;
     }
 }
