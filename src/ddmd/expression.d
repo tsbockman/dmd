@@ -15387,6 +15387,8 @@ extern (C++) final class CmpExp : BinExp
             return e;
         }
 
+        Expression eb1 = e1, eb2 = e2;
+        // typeCombine() mutates this.type, this.e1, and this.e2
         if (Expression ex = typeCombine(this, sc))
             return ex;
 
@@ -15394,6 +15396,36 @@ extern (C++) final class CmpExp : BinExp
         auto f2 = checkNonAssignmentArrayOp(e2);
         if (f1 || f2)
             return new ErrorExp();
+
+        // For integer comparisons, ensure the signed-unsigned comparison is safe. (issue 259)
+        if ((op == TOKlt || op == TOKle || op == TOKgt || op == TOKge) &&
+            type && type.isintegral() && t1.isunsigned() != t2.isunsigned())
+        {
+            Expression se;
+            Type s, u;
+            if (t1.isunsigned())
+            {
+                se = eb2;
+                s = t2;
+                u = t1;
+            }
+            else
+            {
+                se = eb1;
+                s = t1;
+                u = t2;
+            }
+
+            if (type.isunsigned())
+            {
+                if(getIntRange(se.optimize(0)).imin.negative) {
+                    // Issue a deprecation warning, since an error causes template instantiations to fail silently.
+                    deprecation("implicit conversion of '%s' from %s to %s is unsafe in comparison", se.toChars(), s.toChars(), type.toChars());
+                }
+            }
+            else
+                assert(type.size() > u.size());
+        }
 
         type = Type.tbool;
 
